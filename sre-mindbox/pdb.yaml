@@ -1,0 +1,10 @@
+...apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: webapp-pdb
+spec:
+  # Реализуем PDB для отказоустойчивости. Сделаем так, чтобы всегда было доступно 2 реплики приложения
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: webapp
