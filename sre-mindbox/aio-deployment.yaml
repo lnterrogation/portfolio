@@ -5,17 +5,15 @@ metadata:
   labels:
     app: webapp
 spec:
-  # Начнем с 6 реплик. Это хорошее число для 3-х зон (по 2 на зону)
-  # и 5-ти нод (некоторые ноды будут иметь по два пода).
-  replicas: 6
+  # Минимум 3 реплики необходимо. Учитываем, что кластер мультизональный, поэтому минимально необходимо хотя бы по 1 поду на каждую зону доступности.
+  replicas: 3
   selector:
     matchLabels:
       app: webapp
-  # Стратегия плавного обновления. Гарантирует отсутствие простоя при выкатке новой версии.
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 1  # Во время обновления может быть недоступен максимум 1 под.
+      maxUnavailable: 1
       maxSurge: 1        
   template:
     metadata:
@@ -24,11 +22,9 @@ spec:
     spec:
       affinity:
         podAntiAffinity:
-          # Мы используем "предпочтительные" правила. Если их невозможно выполнить
-          # (например, не хватает нод/зон), под все равно будет запущен.
-          # Это лучше, чем required..., которое может полностью заблокировать деплой.
+          # Кажется, что лучше использовать preferred правила, чтобы полностью не блокировать деплой, если, к примеру, не хватит нод или зон.
           preferredDuringSchedulingIgnoredDuringExecution:
-          # Правило №1 (самый высокий приоритет): РАСПРЕДЕЛЯТЬ ПО ЗОНАМ
+          # Размазываем поды по зонам
           - weight: 100
             podAffinityTerm:
               labelSelector:
@@ -37,10 +33,8 @@ spec:
                     operator: In
                     values:
                     - webapp
-              # Ключ топологии для зон доступности. Kubernetes будет стараться
-              # поместить под в ту зону, где меньше всего подов с меткой app: ha-webapp
               topologyKey: "topology.kubernetes.io/zone"
-          # Правило №2 (приоритет ниже): РАСПРЕДЕЛЯТЬ ПО УЗЛАМ
+          # Размазываем поды по нодам
           - weight: 50
             podAffinityTerm:
               labelSelector:
@@ -58,41 +52,42 @@ spec:
           containerPort: 80
         resources:
           requests:
-            cpu: "250m"    # 0.25 ядра
-            memory: "256Mi"
+            cpu: "200m"    # 0.2 ядра
+            memory: "128Mi"
           limits:
             cpu: "500m"    # 0.5 ядра
-            memory: "512Mi"
-        # Проверки работоспособности - критически важны для отказоустойчивости
+            memory: "256Mi"
+        # Ливнесс и рединесс пробы для подов, чтобы можно было следить за состоянием подов и решить задачу с временем инициализации в 10 секунд
         livenessProbe:
           httpGet:
             path: / # Проверка, что приложение "живо"
             port: http
-          initialDelaySeconds: 15 # Начать проверку через 15 сек после старта
+          initialDelaySeconds: 10 # Начать проверку через 10 сек после старта
           periodSeconds: 20
         readinessProbe:
           httpGet:
             path: / # Проверка, что приложение готово принимать трафик
             port: http
-          initialDelaySeconds: 5
+          initialDelaySeconds: 10
           periodSeconds: 10
       # Время на корректное завершение работы пода (например, закончить обработку запросов)
       terminationGracePeriodSeconds: 30
 
 ---
+# PDB решает задачу отказоустойчивости, обеспечивая необходимый минимум рабочих подов.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: webapp-pdb
 spec:
-  # Максимум 1 под может быть недоступен одновременно из-за добровольных прерываний.
-  # Например, при команде kubectl drain для обновления ноды.
   maxUnavailable: 1
+  minAvailable: 3
   selector:
     matchLabels:
       app: webapp
 
 ---
+# HPA решает задачу неравномерной нагрузки, минимального потребления ресурсов и отказоустойчивости
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -102,27 +97,28 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: webapp-deployment
-  minReplicas: 6      # Минимальное количество, которое мы задали в Deployment
-  maxReplicas: 15     # Максимальное количество при пиковой нагрузке
+  minReplicas: 3      
+  maxReplicas: 9     # Выбор значения обусловлен тем, что существует вероятность превышения ожидаемой пиковой нагрузки.
   metrics:
   - type: Resource
     resource:
       name: cpu
-      # Цель: поддерживать среднюю загрузку CPU на уровне 75% от запрошенных (requests.cpu)
       target:
         type: Utilization
-        averageUtilization: 75
+        averageUtilization: 50 # 50% от запрошенных CPU — 0,1 ядра. Это решает задачу "тяжёлых" первых запросов и учитывает дальнейшее потребление.
   behavior:
     scaleDown:
-      # Ждать 5 минут после спада нагрузки, прежде чем удалять поды.
-      # Это защищает от "хлопанья" (быстрого создания и удаления подов).
+    # защищаемся от флаппинга
       stabilizationWindowSeconds: 300
       policies:
+    # не удаляем больше 2 подов в минуту  
       - type: Pods
         value: 2
         periodSeconds: 60
 
 ---
+# В ТЗ не сказано, где именно располагается кластер. Предполагаю, что это будет облачное решение, поэтому реализуем сервис типа LoadBalancer
+# Это решение поможет распределять трафик по всем сервисам с меткой webapp
 apiVersion: v1
 kind: Service
 metadata:
