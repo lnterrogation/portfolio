@@ -1,0 +1,138 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp-deployment
+  labels:
+    app: webapp
+spec:
+  # Начнем с 6 реплик. Это хорошее число для 3-х зон (по 2 на зону)
+  # и 5-ти нод (некоторые ноды будут иметь по два пода).
+  replicas: 6
+  selector:
+    matchLabels:
+      app: webapp
+  # Стратегия плавного обновления. Гарантирует отсутствие простоя при выкатке новой версии.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1  # Во время обновления может быть недоступен максимум 1 под.
+      maxSurge: 1        
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      affinity:
+        podAntiAffinity:
+          # Мы используем "предпочтительные" правила. Если их невозможно выполнить
+          # (например, не хватает нод/зон), под все равно будет запущен.
+          # Это лучше, чем required..., которое может полностью заблокировать деплой.
+          preferredDuringSchedulingIgnoredDuringExecution:
+          # Правило №1 (самый высокий приоритет): РАСПРЕДЕЛЯТЬ ПО ЗОНАМ
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - webapp
+              # Ключ топологии для зон доступности. Kubernetes будет стараться
+              # поместить под в ту зону, где меньше всего подов с меткой app: ha-webapp
+              topologyKey: "topology.kubernetes.io/zone"
+          # Правило №2 (приоритет ниже): РАСПРЕДЕЛЯТЬ ПО УЗЛАМ
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - webapp
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: web-server
+        image: nginx:latest
+        ports:
+        - name: http
+          containerPort: 80
+        resources:
+          requests:
+            cpu: "250m"    # 0.25 ядра
+            memory: "256Mi"
+          limits:
+            cpu: "500m"    # 0.5 ядра
+            memory: "512Mi"
+        # Проверки работоспособности - критически важны для отказоустойчивости
+        livenessProbe:
+          httpGet:
+            path: / # Проверка, что приложение "живо"
+            port: http
+          initialDelaySeconds: 15 # Начать проверку через 15 сек после старта
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: / # Проверка, что приложение готово принимать трафик
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      # Время на корректное завершение работы пода (например, закончить обработку запросов)
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: webapp-pdb
+spec:
+  # Максимум 1 под может быть недоступен одновременно из-за добровольных прерываний.
+  # Например, при команде kubectl drain для обновления ноды.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: webapp
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: webapp-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: webapp-deployment
+  minReplicas: 6      # Минимальное количество, которое мы задали в Deployment
+  maxReplicas: 15     # Максимальное количество при пиковой нагрузке
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      # Цель: поддерживать среднюю загрузку CPU на уровне 75% от запрошенных (requests.cpu)
+      target:
+        type: Utilization
+        averageUtilization: 75
+  behavior:
+    scaleDown:
+      # Ждать 5 минут после спада нагрузки, прежде чем удалять поды.
+      # Это защищает от "хлопанья" (быстрого создания и удаления подов).
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: webapp
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
