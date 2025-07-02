@@ -52,10 +52,9 @@ spec:
           containerPort: 80
         resources:
           requests:
-            cpu: "200m"    # 0.2 ядра
+            cpu: "100m"    # 0.1 ядра
             memory: "128Mi"
           limits:
-            cpu: "500m"    # 0.5 ядра
             memory: "256Mi"
         # Ливнесс и рединесс пробы для подов, чтобы можно было следить за состоянием подов и решить задачу с временем инициализации в 10 секунд
         livenessProbe:
@@ -64,12 +63,6 @@ spec:
             port: http
           initialDelaySeconds: 10 # Начать проверку через 10 сек после старта
           periodSeconds: 20
-        readinessProbe:
-          httpGet:
-            path: / # Проверка, что приложение готово принимать трафик
-            port: http
-          initialDelaySeconds: 10
-          periodSeconds: 10
       # Время на корректное завершение работы пода (например, закончить обработку запросов)
       terminationGracePeriodSeconds: 30
 
@@ -98,7 +91,7 @@ spec:
     kind: Deployment
     name: webapp-deployment
   minReplicas: 3      
-  maxReplicas: 9     # Выбор значения обусловлен тем, что существует вероятность превышения ожидаемой пиковой нагрузки.
+  maxReplicas: 9     # Выбор значения обусловлен тем, что существует вероятность превышения ожидаемой пиковой нагрузки, поэтому обеспечиваем избыточность.
   metrics:
   - type: Resource
     resource:
