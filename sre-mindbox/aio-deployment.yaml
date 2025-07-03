@@ -30,18 +30,8 @@ spec:
               app: webapp
       affinity:
         podAntiAffinity:
-          # Кажется, что лучше использовать preferred правила, чтобы полностью не блокировать деплой, если, к примеру, не хватит нод или зон.
+          # Кажется, что лучше использовать preferred правила, чтобы полностью не блокировать деплой, если, к примеру, не хватит нод.
           preferredDuringSchedulingIgnoredDuringExecution:
-          # Размазываем поды по зонам
-          - weight: 100
-            podAffinityTerm:
-              labelSelector:
-                matchExpressions:
-                  - key: app
-                    operator: In
-                    values:
-                    - webapp
-              topologyKey: "topology.kubernetes.io/zone"
           # Размазываем поды по нодам
           - weight: 50
             podAffinityTerm:
