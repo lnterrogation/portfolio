@@ -32,8 +32,6 @@ spec:
         podAntiAffinity:
           # Кажется, что лучше использовать preferred правила, чтобы полностью не блокировать деплой, если, к примеру, не хватит нод.
           preferredDuringSchedulingIgnoredDuringExecution:
-          # Размазываем поды по нодам
-          - weight: 50
             podAffinityTerm:
               labelSelector:
                 matchExpressions:
