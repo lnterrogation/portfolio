@@ -20,6 +20,14 @@ spec:
       labels:
         app: webapp
     spec:
+  # Реализуем pod topology spread constraints для мягкого распределения подов по зонам доступности
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone # Распределяем по зонам
+          whenUnsatisfiable: ScheduleAnyway          # Все равно шедулим под, если нельзя соблюсти баланс
+          labelSelector:
+            matchLabels:
+              app: webapp
       affinity:
         podAntiAffinity:
           # Кажется, что лучше использовать preferred правила, чтобы полностью не блокировать деплой, если, к примеру, не хватит нод или зон.
@@ -57,13 +65,21 @@ spec:
             memory: "128Mi"
           limits:
             memory: "256Mi"
-        # Ливнесс и рединесс пробы для подов, чтобы можно было следить за состоянием подов и решить задачу с временем инициализации в 10 секунд
-        livenessProbe:
+  # стартап проба сделает 4 попытки раз в 5 секунд, этого с запасом должно хватить на инициализацию.
+  # её реализация позволит дать приложению время на запуск
+        startupProbe:
           httpGet:
-            path: / # Проверка, что приложение "живо"
+            path: /
             port: http
-          initialDelaySeconds: 10 # Начать проверку через 10 сек после старта
-          periodSeconds: 20
+          failureThreshold: 4
+          periodSeconds: 5
+  # теперь реализуем readiness-пробу, чтобы убедиться в том, что приложение готово принимать трафик после того как запустилось
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          periodSeconds: 5
+          failureThreshold: 2
       # Время на корректное завершение работы пода (например, закончить обработку запросов)
       terminationGracePeriodSeconds: 30
 
@@ -92,7 +108,7 @@ spec:
     kind: Deployment
     name: webapp-deployment
   minReplicas: 3      
-  maxReplicas: 9     # Выбор значения обусловлен тем, что существует вероятность превышения ожидаемой пиковой нагрузки, поэтому обеспечиваем избыточность.
+  maxReplicas: 6     # Выбор значения обусловлен тем, что существует вероятность превышения ожидаемой пиковой нагрузки, поэтому обеспечиваем избыточность.
   metrics:
   - type: Resource
     resource:
